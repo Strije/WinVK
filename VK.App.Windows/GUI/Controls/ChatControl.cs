@@ -22,6 +22,8 @@ namespace VK.App.Windows.GUI.Controls
         private Dialog _chat = null;
         private List<Message> _messages = null;
 
+        private object _messages_lock = new object();
+
         private bool _loaded = false;
 
         private bool _heightCalculated = false;
@@ -105,40 +107,44 @@ namespace VK.App.Windows.GUI.Controls
                     oldMessages.AddRange(newMessages);
                 }
 
-                this._messages = oldMessages.Reverse<Message>().ToList();
+                List<int> ids = new List<int>();
 
-                if (this._messages != null)
+                lock (_messages_lock)
                 {
-                    List<int> ids = new List<int>();
+                    this._messages = oldMessages.Reverse<Message>().ToList();
 
-                    foreach (Message msg in this._messages)
+                    if (this._messages != null)
                     {
-                        if (!ids.Contains(msg.UserID))
-                            ids.Add(msg.UserID);
 
-                        if (msg.CryptedNow && this._chat.CryptKey != null)
-                            msg.Decrypt(this._chat.CryptKey);
-
-                        if (msg.Attachments != null && msg.Attachments.Length > 0)
+                        foreach (Message msg in this._messages)
                         {
-                            foreach (Attachment a in msg.Attachments)
+                            if (!ids.Contains(msg.UserID))
+                                ids.Add(msg.UserID);
+
+                            if (msg.CryptedNow && this._chat.CryptKey != null)
+                                msg.Decrypt(this._chat.CryptKey);
+
+                            if (msg.Attachments != null && msg.Attachments.Length > 0)
                             {
-                                if (a.Type == "photo" && a.Photo != null)
+                                foreach (Attachment a in msg.Attachments)
                                 {
-                                    a.Photo.Load();
+                                    if (a.Type == "photo" && a.Photo != null)
+                                    {
+                                        a.Photo.Load();
+                                    }
                                 }
                             }
                         }
                     }
+                }
 
-                    User[] users = await User.GetAll(ids);
+                User[] users = await User.GetAll(ids);
 
-                    if (users != null)
+                if (users != null)
+                {
+                    foreach (User u in users)
                     {
-                        foreach (User u in users)
-                        {
-                            u.GetPhoto();
-                        }
+                        u.GetPhoto();
                     }
                 }
 
@@ -156,55 +162,61 @@ namespace VK.App.Windows.GUI.Controls
 
             (new Thread(async () =>
             {
-                this._messages = await this._chat.GetMessages();
+                List<Message> messages = await this._chat.GetMessages();
 
-                if (this._chat.Crypt)
+                List<int> ids = new List<int>();
+
+                lock (_messages_lock)
                 {
-                    this.InvokeEx(t =>
+                    this._messages = messages;
+
+                    if (this._chat.Crypt)
                     {
-                        DecryptMessagesForm frm = new DecryptMessagesForm();
-                        if (frm.ShowDialog(t.FindForm()) == DialogResult.OK)
+                        this.InvokeEx(t =>
                         {
-                            t._chat.CryptKey = frm.Passphrase;
-                        }
-                    });
-                }
-
-                this._so = 0;
-                this._oldH = 0;
-                if (this._messages != null)
-                {
-                    this._messages = this._messages.Reverse<Message>().ToList();
-
-                    List<int> ids = new List<int>();
-
-                    foreach (Message msg in this._messages)
-                    {
-                        if (!ids.Contains(msg.UserID))
-                            ids.Add(msg.UserID);
-
-                        if (msg.CryptedNow && this._chat.CryptKey != null)
-                            msg.Decrypt(this._chat.CryptKey);
-
-                        if (msg.Attachments != null && msg.Attachments.Length > 0)
-                        {
-                            foreach (Attachment a in msg.Attachments)
+                            DecryptMessagesForm frm = new DecryptMessagesForm();
+                            if (frm.ShowDialog(t.FindForm()) == DialogResult.OK)
                             {
-                                if (a.Type == "photo" && a.Photo != null)
+                                t._chat.CryptKey = frm.Passphrase;
+                            }
+                        });
+                    }
+
+                    this._so = 0;
+                    this._oldH = 0;
+                    if (this._messages != null)
+                    {
+                        this._messages = this._messages.Reverse<Message>().ToList();
+
+                        foreach (Message msg in this._messages)
+                        {
+                            if (!ids.Contains(msg.UserID))
+                                ids.Add(msg.UserID);
+
+                            if (msg.CryptedNow && this._chat.CryptKey != null)
+                                msg.Decrypt(this._chat.CryptKey);
+
+                            if (msg.Attachments != null && msg.Attachments.Length > 0)
+                            {
+                                foreach (Attachment a in msg.Attachments)
                                 {
-                                    a.Photo.Load();
+                                    if (a.Type == "photo" && a.Photo != null)
+                                    {
+                                        a.Photo.Load();
+                                    }
                                 }
                             }
                         }
                     }
+                }
 
-                    User[] users = await User.GetAll(ids);
+                User[] users = await User.GetAll(ids);
 
-                    if(users != null){
-                        foreach (User u in users)
-                        {
-                            u.GetPhoto();
-                        }
+                if (users != null)
+                {
+                    foreach (User u in users)
+                    {
+                        u.GetPhoto();
                     }
                 }
 
@@ -305,11 +317,22 @@ namespace VK.App.Windows.GUI.Controls
                 int y = -this.ScrollOffset + 10;
 
                 Message prevMsg = null;
-                foreach (Message msg in this._messages)
-                {
-                    y += Drawer.DrawMessage(g, msg, prevMsg, this.Font, ControlState.Idle, y, this.Width, this.Height, this.Mouse);
 
-                    prevMsg = msg;
+                lock (_messages_lock)
+                {
+                    try
+                    {
+                        foreach (Message msg in this._messages)
+                        {
+                            y += Drawer.DrawMessage(g, msg, prevMsg, this.Font, ControlState.Idle, y, this.Width, this.Height, this.Mouse);
+
+                            prevMsg = msg;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        Console.WriteLine(exception);
+                    }
                 }
 
                 if (!this._heightCalculated)
